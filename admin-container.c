@@ -13,6 +13,10 @@ int create_container(char host[5], int port, char name[20]){
 	struct sockaddr_in server;
 	char petition[20], reply[50], port_str[5];
 	FILE *fptr;
+	char * token;
+	char *contents = NULL;
+    size_t len = 0;
+	bool already_exist = false;
 
 	create = socket(AF_INET, SOCK_STREAM, 0);
 	if(create == -1){
@@ -46,15 +50,30 @@ int create_container(char host[5], int port, char name[20]){
 
 	close(create);
 
+	fptr = fopen("containers.txt", "r");
+
+	while(getline(&contents, &len, fptr) != -1){
+        //printf("%s\n", contents);
+		token = strtok(contents, " ");
+		if(strcmp(token, name) == 0){
+			already_exist = true;
+			break;
+		}
+    }
+
+	fclose(fptr);
+
 	fptr = fopen("containers.txt", "a");
 
-	snprintf(port_str, 10, "%d", port);
+	if(!already_exist){
+		snprintf(port_str, 10, "%d", port);
 
-	strcat(name, " ");
-	strcat(name, port_str);
-	strcat(name, "\n");
+		strcat(name, " ");
+		strcat(name, port_str);
+		strcat(name, "\n");
 
-	fputs(name, fptr);
+		fputs(name, fptr);
+	}
 
 	fclose(fptr);
 }
@@ -67,6 +86,7 @@ int send_petition(char petition[20], char name[20]){
 	char *contents = NULL;
 	char * token;
     size_t len = 0;
+	bool delete = false;
 
 	fptr = fopen("containers.txt", "r");
 
@@ -76,11 +96,13 @@ int send_petition(char petition[20], char name[20]){
 		if(strcmp(token, name) == 0){
 			token = strtok(NULL, " ");
 			//printf("el token es: %s\n", token);
+			break;
 		}
     }
+	//printf("el tken sale: %s\n", token);
 	port = atoi(token);
 
-	//printf("puerto: %d\n", port);
+	//printf("puerto: %d para %s\n", port, petition);
 
 	fclose(fptr);
 
@@ -100,6 +122,10 @@ int send_petition(char petition[20], char name[20]){
 	}
 	puts("Connected");
 
+	if(strcmp(petition, "delete") == 0){
+		delete = true;
+	}
+
 	strcat(petition, " ");
 
 	strcat(petition, name);
@@ -111,6 +137,12 @@ int send_petition(char petition[20], char name[20]){
 	recv(send_socket, reply, 50, 0);
 
 	printf("Respuesta: %s\n", reply);
+
+	if(delete){
+		fptr = fopen("containers.txt", "w");
+
+		fclose(fptr);
+	}
 
 	close(send_socket);
 }
@@ -173,6 +205,7 @@ int main(int argc, char *argv[]) {
 		close(pipeHost1[0]);
 		close(pipeHost2[0]);
 		
+		
 		//Create socket
 		subs_socket = socket(AF_INET, SOCK_STREAM, 0);
 		if (subs_socket == -1) {
@@ -192,29 +225,39 @@ int main(int argc, char *argv[]) {
 		}
 		
 		puts("Subs host bind done\n");
+		for(int i = 0; i < 2; i++){
+			listen(subs_socket, 3);
+			puts("Waiting for ecs-agents connections...");
+			c = sizeof(struct sockaddr_in);
 
-		listen(subs_socket, 3);
-		puts("Waiting for ecs-agents connections...");
-		c = sizeof(struct sockaddr_in);
+			ecs_agent = accept(subs_socket, (struct sockaddr *)&ecs_agent_client, (socklen_t*)&c);
+			if(ecs_agent < 0) {
+				perror("accept failed");
+				return 1;
+			}
+			puts("Connection accepted");
 
-		ecs_agent = accept(subs_socket, (struct sockaddr *)&ecs_agent_client, (socklen_t*)&c);
-		if(ecs_agent < 0) {
-			perror("accept failed");
-			return 1;
+			memset(host_info, 0, 20);
+
+			recv(ecs_agent, host_info, 20, 0);
+
+			printf("Host: %s\n", host_info);
+
+			if(i == 0){
+				write(pipeHost1[1], host_info, SIZE);
+				close(pipeHost1[1]);
+			} else{
+				write(pipeHost2[1], host_info, SIZE);
+				close(pipeHost2[1]);
+			}
+			
 		}
-		puts("Connection accepted");
-
-		memset(host_info, 0, 20);
-
-		recv(ecs_agent, host_info, 20, 0);
-
-		printf("Host: %s\n", host_info);
-		write(pipeHost1[1], host_info, SIZE);
-		close(pipeHost1[1]);
 		
 
 	} else{
 		close(pipeHost1[1]);
+		close(pipeHost2[1]);
+
 		char host1_info[20], host2_info[20];
 		struct sockaddr_in server, client;
 
@@ -243,6 +286,7 @@ int main(int argc, char *argv[]) {
 		puts("bind done");
 		
 		read(pipeHost1[0], host1_info, SIZE);
+		read(pipeHost2[0], host2_info, SIZE);
 
 		while(1){
 			//Listen
@@ -276,12 +320,10 @@ int main(int argc, char *argv[]) {
 						printf("Fue seleccionado el %d\n", host);
 						memset(host_info, 0, SIZE);
 						memset(host_name, 0, 5);
-						if(host == 0 || host == 1){
+						if(host == 0){
 							strcpy(host_info, host1_info);
 							printf("Host: %s\n", host1_info);							
 						} else if(host == 1){
-							recieved = true;
-							continue;
 							strcpy(host_info, host2_info);
 							printf("Host: %s\n", host_info);
 						}
@@ -300,6 +342,7 @@ int main(int argc, char *argv[]) {
 						recieved = true;
 					} else if(strcmp(petition, "list") == 0){
 						list_containers();
+						recieved = true;
 					}
 					
 				}

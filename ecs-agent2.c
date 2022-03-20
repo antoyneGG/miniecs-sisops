@@ -17,7 +17,7 @@ int main(int argc, char *argv[]) {
 	if (agent == -1) {
 		printf("Could not create ecs-agent1");
 	}
-	puts("Ecs-agent1 created");
+	puts("Ecs-agent2 created");
 
 	server.sin_family = AF_INET;
 	server.sin_addr.s_addr = INADDR_ANY;
@@ -31,7 +31,7 @@ int main(int argc, char *argv[]) {
 
     memset( info, 0, 20 );
 
-    strcpy(info, "host1 8080");
+    strcpy(info, "host2 9090");
 
     send(agent, info, strlen(info), 0);
 
@@ -73,9 +73,11 @@ int main(int argc, char *argv[]) {
 				
 				token = strtok(admin_petition, " ");
 				strcpy(petition, token);
-				token = strtok(NULL, " ");
-				strcpy(name, token);
-				printf("Petition: %s\nName: %s\n", petition, name);
+				if(strcmp(petition, "list") != 0){
+					token = strtok(NULL, " ");
+					strcpy(name, token);
+					printf("Petition: %s\nName: %s\n", petition, name);
+				}
 				received = true;
 			}
 		}
@@ -88,7 +90,7 @@ int main(int argc, char *argv[]) {
 			} else if(strcmp(petition, "delete") == 0){
 				execlp("docker", "docker", "rm", name, NULL);
 			} else if(strcmp(petition, "list") == 0){
-				execlp("docker", "docker", "ps", name, NULL);
+				execlp("docker", "docker", "ps", NULL);
 			}
 		} else{
 			if(strcmp(petition, "create") == 0){
