@@ -6,6 +6,7 @@
 #include<unistd.h>	//write
 #include<stdbool.h>
 
+#define BUFFER 1000
 #define SIZE 20
 
 int create_container(char host[5], int port, char name[20]){
@@ -56,6 +57,7 @@ int create_container(char host[5], int port, char name[20]){
         //printf("%s\n", contents);
 		token = strtok(contents, " ");
 		if(strcmp(token, name) == 0){
+			printf("si existe\n");
 			already_exist = true;
 			break;
 		}
@@ -66,6 +68,7 @@ int create_container(char host[5], int port, char name[20]){
 	fptr = fopen("containers.txt", "a");
 
 	if(!already_exist){
+		printf("no existe\n");
 		snprintf(port_str, 10, "%d", port);
 
 		strcat(name, " ");
@@ -81,12 +84,14 @@ int create_container(char host[5], int port, char name[20]){
 int send_petition(char petition[20], char name[20]){
 	int send_socket, port;
 	struct sockaddr_in server;
-	char reply[50];
+	char reply[50], buffer[BUFFER];
 	FILE *fptr;
+	FILE *fptr2;
 	char *contents = NULL;
 	char * token;
     size_t len = 0;
 	bool delete = false;
+	int del = 0, line = 0;
 
 	fptr = fopen("containers.txt", "r");
 
@@ -98,6 +103,7 @@ int send_petition(char petition[20], char name[20]){
 			//printf("el token es: %s\n", token);
 			break;
 		}
+		del++;
     }
 	//printf("el tken sale: %s\n", token);
 	port = atoi(token);
@@ -139,9 +145,21 @@ int send_petition(char petition[20], char name[20]){
 	printf("Respuesta: %s\n", reply);
 
 	if(delete){
-		fptr = fopen("containers.txt", "w");
+		fptr = fopen("containers.txt", "r");
+		fptr2 = fopen("temp.txt", "w");
 
+		while((fgets(buffer, BUFFER, fptr)) != NULL){
+			if(line != del){
+				fputs(buffer, fptr2);
+			}
+			line++;
+		}
+
+		fclose(fptr2);
 		fclose(fptr);
+
+		remove("containers.txt");
+		rename("temp.txt", "containers.txt");
 	}
 
 	close(send_socket);
