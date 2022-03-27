@@ -5,11 +5,69 @@
 #include<arpa/inet.h>	//inet_addr
 #include<unistd.h>	//write
 #include<stdbool.h>
+#include<pthread.h>
+#include<assert.h>
+#include<sys/mman.h>
+#include<fcntl.h>
 
 #define BUFFER 1000
 #define SIZE 20
 
-int create_container(char host[5], int port, char name[20]){
+int cont = 0;
+
+typedef struct __myarg_t{
+	char host[5];
+	char petition[20];
+	int port;
+	int ecs_agent;
+	char name[20];
+} myarg_t;
+
+int subscribe_host(void *arg){
+	myarg_t * args = arg;
+	char host_info[20];
+
+	puts("Connection accepted");
+
+	memset(host_info, 0, 20);
+
+	recv(args->ecs_agent, host_info, 20, 0);
+
+	printf("Host: %s\n", host_info);
+
+	int fd = shm_open("HOSTS", O_CREAT | O_RDWR, 0600);
+	if (fd < 0){
+		perror("shm_open()");
+		return EXIT_FAILURE;
+	}
+
+	ftruncate(fd, 20);
+	
+	char **hosts = (char **)mmap(0, 20, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+
+	for(int i = 0; i < 20; i++){
+		char temp[20];
+		hosts[i] = temp;
+	}
+	printf("Sender mapped address: %p\n", hosts);
+
+	hosts[cont] = host_info;
+	//strcpy(hosts[cont], host_info);
+
+	printf("shm sender: %s\n", hosts[cont]);
+
+	munmap(hosts, 20);
+
+	cont++;
+
+	close(fd);
+
+	printf("Finished subscribe host\n");
+
+}
+
+int create_container(void *arg){
+	myarg_t * args = arg;
 	int create;
 	struct sockaddr_in server;
 	char petition[20], reply[50], port_str[5];
@@ -27,7 +85,7 @@ int create_container(char host[5], int port, char name[20]){
 
 	server.sin_family = AF_INET;
 	server.sin_addr.s_addr = inet_addr("127.0.0.1");
-	server.sin_port = htons( port );
+	server.sin_port = htons( args->port );
 
 	if( connect(create, (struct sockaddr *)&server, sizeof(server)) < 0) {
 		perror("Connect failed. Error");
@@ -39,7 +97,9 @@ int create_container(char host[5], int port, char name[20]){
 
 	strcpy(petition, "create ");
 
-	strcat(petition, name);
+	strcat(petition, args->name);
+
+	printf("ENVIO: %s\n", petition);
 
 	send(create, petition, strlen(petition), 0);
 
@@ -56,7 +116,7 @@ int create_container(char host[5], int port, char name[20]){
 	while(getline(&contents, &len, fptr) != -1){
         //printf("%s\n", contents);
 		token = strtok(contents, " ");
-		if(strcmp(token, name) == 0){
+		if(strcmp(token, args->name) == 0){
 			printf("si existe\n");
 			already_exist = true;
 			break;
@@ -65,23 +125,30 @@ int create_container(char host[5], int port, char name[20]){
 
 	fclose(fptr);
 
+	printf("SIGO VIVO\n");
+
 	fptr = fopen("containers.txt", "a");
 
 	if(!already_exist){
 		printf("no existe\n");
-		snprintf(port_str, 10, "%d", port);
+		snprintf(port_str, 10, "%d", args->port);
 
-		strcat(name, " ");
-		strcat(name, port_str);
-		strcat(name, "\n");
+		strcat(args->name, " ");
+		strcat(args->name, port_str);
+		strcat(args->name, "\n");
 
-		fputs(name, fptr);
+		fputs(args->name, fptr);
 	}
 
 	fclose(fptr);
+
+	printf("SIGO MAS VIVO QUE MUERTO\n");
+
+	free(args);
 }
 
-int send_petition(char petition[20], char name[20]){
+int send_petition(void *arg){
+	myarg_t *args = arg;
 	int send_socket, port;
 	struct sockaddr_in server;
 	char reply[50], buffer[BUFFER];
@@ -98,7 +165,7 @@ int send_petition(char petition[20], char name[20]){
     while (getline(&contents, &len, fptr) != -1){
         //printf("%s\n", contents);
 		token = strtok(contents, " ");
-		if(strcmp(token, name) == 0){
+		if(strcmp(token, args->name) == 0){
 			token = strtok(NULL, " ");
 			//printf("el token es: %s\n", token);
 			break;
@@ -128,15 +195,15 @@ int send_petition(char petition[20], char name[20]){
 	}
 	puts("Connected");
 
-	if(strcmp(petition, "delete") == 0){
+	if(strcmp(args->petition, "delete") == 0){
 		delete = true;
 	}
 
-	strcat(petition, " ");
+	strcat(args->petition, " ");
 
-	strcat(petition, name);
+	strcat(args->petition, args->name);
 
-	send(send_socket, petition, strlen(petition), 0);
+	send(send_socket, args->petition, strlen(args->petition), 0);
 
 	memset(reply, 0, 50);
 
@@ -163,6 +230,8 @@ int send_petition(char petition[20], char name[20]){
 	}
 
 	close(send_socket);
+
+	free(args);
 }
 
 int list_containers(){
@@ -202,13 +271,10 @@ int list_containers(){
 }
 
 int main(int argc, char *argv[]) {
-	int admin_socket, subs_socket, ecs_client, ecs_agent, c, read_size, cont, pipeHost1[2], pipeHost2[2], host = 0, port;
+	int admin_socket, subs_socket, ecs_client, ecs_agent, c, read_size, cont, host = 0, port;
 	char client_message[20], petition[20], name[20], host_info[20], buffer[20], host_name[5], port_char[5];
 	char * token;
 	bool recieved = false, separator = false;
-
-	pipe(pipeHost1);
-	pipe(pipeHost2);
 
 	int readbytes;
 
@@ -219,9 +285,7 @@ int main(int argc, char *argv[]) {
 	if(pid == 0){
 		struct sockaddr_in subs_host_server, ecs_agent_client;
 		char message[1000], server_reply[2000];
-
-		close(pipeHost1[0]);
-		close(pipeHost2[0]);
+		int i = 0;
 		
 		
 		//Create socket
@@ -243,7 +307,7 @@ int main(int argc, char *argv[]) {
 		}
 		
 		puts("Subs host bind done\n");
-		for(int i = 0; i < 2; i++){
+		while(1){
 			listen(subs_socket, 3);
 			puts("Waiting for ecs-agents connections...");
 			c = sizeof(struct sockaddr_in);
@@ -253,28 +317,18 @@ int main(int argc, char *argv[]) {
 				perror("accept failed");
 				return 1;
 			}
-			puts("Connection accepted");
-
-			memset(host_info, 0, 20);
-
-			recv(ecs_agent, host_info, 20, 0);
-
-			printf("Host: %s\n", host_info);
-
-			if(i == 0){
-				write(pipeHost1[1], host_info, SIZE);
-				close(pipeHost1[1]);
-			} else{
-				write(pipeHost2[1], host_info, SIZE);
-				close(pipeHost2[1]);
-			}
 			
+			pthread_t host_connect;
+			myarg_t arg_h;
+			arg_h.ecs_agent = ecs_agent;
+			pthread_create( &host_connect, NULL, (void*)subscribe_host, &arg_h);
+
 		}
 		
 
 	} else{
-		close(pipeHost1[1]);
-		close(pipeHost2[1]);
+		//close(pipeHost1[1]);
+		//close(pipeHost2[1]);
 
 		char host1_info[20], host2_info[20];
 		struct sockaddr_in server, client;
@@ -303,8 +357,10 @@ int main(int argc, char *argv[]) {
 		}
 		puts("bind done");
 		
-		read(pipeHost1[0], host1_info, SIZE);
-		read(pipeHost2[0], host2_info, SIZE);
+		//read(pipeHost1[0], host1_info, SIZE);
+		//read(pipeHost2[0], host2_info, SIZE);
+		strcpy(host1_info, "host1 8080");
+		strcpy(host2_info, "host2 9090");
 
 		while(1){
 			//Listen
@@ -321,6 +377,29 @@ int main(int argc, char *argv[]) {
 				return 1;
 			}
 			puts("Connection accepted");
+
+			//se separa
+
+			
+			int fd = shm_open("HOSTS", O_RDONLY, 0666);
+			if(fd < 0){
+				perror("shm_open()");
+				return EXIT_FAILURE;
+			}
+			
+			char **hosts = (char **)mmap(0, 20, PROT_READ, MAP_SHARED, fd, 0);
+			printf("Receiver mapped address: %p\n", hosts);
+
+			for(int i = 0; i < cont; i++){
+				printf("shm: %s\n", hosts[i]);
+			}
+
+			munmap(hosts, 20);
+
+			close(fd);
+
+			shm_unlink("HOSTS");
+			
 
 			recieved = false;
 
@@ -351,15 +430,32 @@ int main(int argc, char *argv[]) {
 						port = atoi(token);
 						printf("Name: %s\nPort: %d\n", host_name, port);
 						if(strcmp(petition, "create") == 0){
-							create_container(host_name, port, name);
+							pthread_t create;
+							myarg_t * args_c = malloc(sizeof(*args_c));
+							strcpy(args_c->host, host_name);
+							args_c->port = port;
+							strcpy(args_c->name, name);
+							pthread_create( &create, NULL, (void*) create_container, args_c);
+							//pthread_join(create, NULL);
+							//create_container(host_name, port, name);
 						} else if(strcmp(petition, "stop") == 0 || strcmp(petition, "delete") == 0){
-							send_petition(petition, name);
+							pthread_t send;
+							myarg_t * args_s = malloc(sizeof(*args_s));
+							strcpy(args_s->petition, petition);
+							strcpy(args_s->name, name);
+							pthread_create( &send, NULL, (void*) send_petition, args_s);
+							//pthread_join(send, NULL);
+							printf("EN PROCESO\n");
+							//send_petition(petition, name);
 						} 
 						//Send the message back to client
 						send(ecs_client, client_message, strlen(client_message), 0);
 						recieved = true;
 					} else if(strcmp(petition, "list") == 0){
-						list_containers();
+						pthread_t list;
+						pthread_create( &list, NULL, (void*) list_containers, NULL);
+						//pthread_join(list, NULL);
+						//list_containers();
 						recieved = true;
 					}
 					
