@@ -16,55 +16,12 @@
 int cont = 0;
 
 typedef struct __myarg_t{
-	char host[5];
 	char petition[20];
 	int port;
 	int ecs_agent;
 	char name[20];
 } myarg_t;
 
-int subscribe_host(void *arg){
-	myarg_t * args = arg;
-	char host_info[20];
-
-	puts("Connection accepted");
-
-	memset(host_info, 0, 20);
-
-	recv(args->ecs_agent, host_info, 20, 0);
-
-	printf("Host: %s\n", host_info);
-
-	int fd = shm_open("HOSTS", O_CREAT | O_RDWR, 0600);
-	if (fd < 0){
-		perror("shm_open()");
-		return EXIT_FAILURE;
-	}
-
-	ftruncate(fd, 20);
-	
-	char **hosts = (char **)mmap(0, 20, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-
-	for(int i = 0; i < 20; i++){
-		char temp[20];
-		hosts[i] = temp;
-	}
-	printf("Sender mapped address: %p\n", hosts);
-
-	hosts[cont] = host_info;
-	//strcpy(hosts[cont], host_info);
-
-	printf("shm sender: %s\n", hosts[cont]);
-
-	munmap(hosts, 20);
-
-	cont++;
-
-	close(fd);
-
-	printf("Finished subscribe host\n");
-
-}
 
 int create_container(void *arg){
 	myarg_t * args = arg;
@@ -270,6 +227,138 @@ int list_containers(){
 	close(list);
 }
 
+
+int admin_container(void *arg){
+	myarg_t * args = arg;
+	char client_message[20], petition[20], name[20];
+	bool received = false;
+	int port, host = 0;
+	char * token;
+	puts("Connection accepted");
+
+	//se separa
+	
+	int fd = shm_open("HOSTS", O_RDONLY, 0666);
+	if(fd < 0){
+		perror("shm_open()");
+		return EXIT_FAILURE;
+	}
+	
+	int *hosts = (int *)mmap(0, 100, PROT_READ, MAP_SHARED, fd, 0);
+	printf("Receiver mapped address: %p\n", hosts);
+
+	for(int i = 0; i < hosts[99]; i++){
+		printf("host%d %d\n", i + 1, hosts[i]);
+	}
+
+	/*
+	munmap(hosts, 100);
+
+	close(fd);
+
+	shm_unlink("HOSTS");
+	*/
+
+	received = false;
+
+	while(!received) {
+		memset( client_message, 0, 20 );
+		//Receive a message from client
+		if (recv(args->ecs_agent, client_message, 20, 0) > 0) {
+			token = strtok(client_message, " ");
+			strcpy(petition, token);
+			if(strcmp(petition, "list") != 0){
+				
+				printf("OLA SOY CONT: %d\n", hosts[99]);
+				token = strtok(NULL, " ");
+				strcpy(name, token);
+				printf("Petition: %s\nName: %s\n", petition, name);
+				host = rand() % hosts[99];
+				printf("Fue seleccionado el %d\n", host);
+				port = hosts[host];
+				printf("Name: host%d\nPort: %d\n", host + 1, port);
+
+				if(strcmp(petition, "create") == 0){
+					pthread_t create;
+					myarg_t * args_c = malloc(sizeof(*args_c));
+					args_c->port = port;
+					strcpy(args_c->name, name);
+					pthread_create( &create, NULL, (void*) create_container, args_c);
+					//pthread_join(create, NULL);
+					//create_container(host_name, port, name);
+				} else if(strcmp(petition, "stop") == 0 || strcmp(petition, "delete") == 0){
+					pthread_t send;
+					myarg_t * args_s = malloc(sizeof(*args_s));
+					strcpy(args_s->petition, petition);
+					strcpy(args_s->name, name);
+					pthread_create( &send, NULL, (void*) send_petition, args_s);
+					//pthread_join(send, NULL);
+					printf("EN PROCESO\n");
+					//send_petition(petition, name);
+				} 
+				//Send the message back to client
+				send(args->ecs_agent, client_message, strlen(client_message), 0);
+				received = true;
+			} else if(strcmp(petition, "list") == 0){
+				pthread_t list;
+				pthread_create( &list, NULL, (void*) list_containers, NULL);
+				//pthread_join(list, NULL);
+				//list_containers();
+				received = true;
+			}
+			
+		}
+	}
+}
+
+int subscribe_host(void *arg){
+	myarg_t * args = arg;
+	char host_info[20];
+	int port;
+	char * token;
+
+	puts("Connection accepted");
+
+	memset(host_info, 0, 20);
+
+	recv(args->ecs_agent, host_info, 20, 0);
+
+	printf("Host: %s\n", host_info);
+
+	int fd = shm_open("HOSTS", O_CREAT | O_RDWR, 0666);
+	if (fd < 0){
+		perror("shm_open()");
+		return EXIT_FAILURE;
+	}
+
+	ftruncate(fd, 100);
+	
+	int *hosts = (int *)mmap(0, 100, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+
+	printf("Sender mapped address: %p\n", hosts);
+
+	token = strtok(host_info, " ");
+	token = strtok(NULL, " ");
+	port = atoi(token);
+
+	hosts[cont] = port;
+	
+	printf("cont es: %d\n", cont);
+	//strcpy(hosts[cont], host_info);
+
+	printf("shm sender: %d\n", hosts[cont]);
+
+	cont++;
+	hosts[99] = cont;
+
+	munmap(hosts, 100);
+
+	close(fd);
+
+	printf("Finished subscribe host\n");
+
+}
+
 int main(int argc, char *argv[]) {
 	int admin_socket, subs_socket, ecs_client, ecs_agent, c, read_size, cont, host = 0, port;
 	char client_message[20], petition[20], name[20], host_info[20], buffer[20], host_name[5], port_char[5];
@@ -330,7 +419,6 @@ int main(int argc, char *argv[]) {
 		//close(pipeHost1[1]);
 		//close(pipeHost2[1]);
 
-		char host1_info[20], host2_info[20];
 		struct sockaddr_in server, client;
 
 		//Create socket
@@ -356,11 +444,6 @@ int main(int argc, char *argv[]) {
 			return 1;
 		}
 		puts("bind done");
-		
-		//read(pipeHost1[0], host1_info, SIZE);
-		//read(pipeHost2[0], host2_info, SIZE);
-		strcpy(host1_info, "host1 8080");
-		strcpy(host2_info, "host2 9090");
 
 		while(1){
 			//Listen
@@ -376,91 +459,11 @@ int main(int argc, char *argv[]) {
 				perror("accept failed");
 				return 1;
 			}
-			puts("Connection accepted");
 
-			//se separa
-
-			
-			int fd = shm_open("HOSTS", O_RDONLY, 0666);
-			if(fd < 0){
-				perror("shm_open()");
-				return EXIT_FAILURE;
-			}
-			
-			char **hosts = (char **)mmap(0, 20, PROT_READ, MAP_SHARED, fd, 0);
-			printf("Receiver mapped address: %p\n", hosts);
-
-			for(int i = 0; i < cont; i++){
-				printf("shm: %s\n", hosts[i]);
-			}
-
-			munmap(hosts, 20);
-
-			close(fd);
-
-			shm_unlink("HOSTS");
-			
-
-			recieved = false;
-
-			while(!recieved) {
-				memset( client_message, 0, 20 );
-				//Receive a message from client
-				if (recv(ecs_client, client_message, 20, 0) > 0) {
-					token = strtok(client_message, " ");
-					strcpy(petition, token);
-					if(strcmp(petition, "list") != 0){
-						token = strtok(NULL, " ");
-						strcpy(name, token);
-						printf("Petition: %s\nName: %s\n", petition, name);
-						host = rand() % 2;
-						printf("Fue seleccionado el %d\n", host);
-						memset(host_info, 0, SIZE);
-						memset(host_name, 0, 5);
-						if(host == 0){
-							strcpy(host_info, host1_info);
-							printf("Host: %s\n", host1_info);							
-						} else if(host == 1){
-							strcpy(host_info, host2_info);
-							printf("Host: %s\n", host_info);
-						}
-						token = strtok(host_info, " ");
-						strcpy(host_name, token);
-						token = strtok(NULL, " ");
-						port = atoi(token);
-						printf("Name: %s\nPort: %d\n", host_name, port);
-						if(strcmp(petition, "create") == 0){
-							pthread_t create;
-							myarg_t * args_c = malloc(sizeof(*args_c));
-							strcpy(args_c->host, host_name);
-							args_c->port = port;
-							strcpy(args_c->name, name);
-							pthread_create( &create, NULL, (void*) create_container, args_c);
-							//pthread_join(create, NULL);
-							//create_container(host_name, port, name);
-						} else if(strcmp(petition, "stop") == 0 || strcmp(petition, "delete") == 0){
-							pthread_t send;
-							myarg_t * args_s = malloc(sizeof(*args_s));
-							strcpy(args_s->petition, petition);
-							strcpy(args_s->name, name);
-							pthread_create( &send, NULL, (void*) send_petition, args_s);
-							//pthread_join(send, NULL);
-							printf("EN PROCESO\n");
-							//send_petition(petition, name);
-						} 
-						//Send the message back to client
-						send(ecs_client, client_message, strlen(client_message), 0);
-						recieved = true;
-					} else if(strcmp(petition, "list") == 0){
-						pthread_t list;
-						pthread_create( &list, NULL, (void*) list_containers, NULL);
-						//pthread_join(list, NULL);
-						//list_containers();
-						recieved = true;
-					}
-					
-				}
-			}
+			pthread_t agent_connect;
+			myarg_t arg_cl;
+			arg_cl.ecs_agent = ecs_client;
+			pthread_create( &agent_connect, NULL, (void*)admin_container, &arg_cl);
 			
 		}
 	}

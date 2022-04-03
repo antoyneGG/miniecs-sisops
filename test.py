@@ -1,5 +1,5 @@
 import ecs
 
-ecs.create_instance("sowo")
-ecs.create_instance("wowo")
-ecs.create_instance("kowo")
+ecs.stop_instance("sowo")
+ecs.stop_instance("wowo")
+ecs.stop_instance("kowo")
