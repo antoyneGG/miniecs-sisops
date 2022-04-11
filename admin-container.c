@@ -9,12 +9,16 @@
 #include<assert.h>
 #include<sys/mman.h>
 #include<fcntl.h>
+#include<semaphore.h>
 
 #define BUFFER 1000
 #define SIZE 20
 
 int cont = 0;
+pthread_mutex_t fileLock1 = PTHREAD_MUTEX_INITIALIZER;
+sem_t shmLock;
 
+//Estructura para guardar los parametros que se van a pasar a los hilos
 typedef struct __myarg_t{
 	char petition[20];
 	int port;
@@ -22,7 +26,7 @@ typedef struct __myarg_t{
 	char name[20];
 } myarg_t;
 
-
+//Esta funcion se encarga de enviar al host la peticion de crear un contenedor
 int create_container(void *arg){
 	myarg_t * args = arg;
 	int create;
@@ -49,6 +53,7 @@ int create_container(void *arg){
 		return 1;
 	}
 	puts("Connected");
+	//printf("Thread: %ld\n", pthread_self());
 
 	memset(petition, 0, 20);
 
@@ -56,7 +61,7 @@ int create_container(void *arg){
 
 	strcat(petition, args->name);
 
-	printf("ENVIO: %s\n", petition);
+	//printf("ENVIO: %s\n", petition);
 
 	send(create, petition, strlen(petition), 0);
 
@@ -68,26 +73,29 @@ int create_container(void *arg){
 
 	close(create);
 
+	pthread_mutex_lock( &fileLock1 );
 	fptr = fopen("containers.txt", "r");
-
+	//printf("entre al archivo\n");
 	while(getline(&contents, &len, fptr) != -1){
         //printf("%s\n", contents);
 		token = strtok(contents, " ");
 		if(strcmp(token, args->name) == 0){
-			printf("si existe\n");
+			//printf("si existe\n");
 			already_exist = true;
 			break;
 		}
     }
 
 	fclose(fptr);
+	pthread_mutex_unlock( &fileLock1 );
 
-	printf("SIGO VIVO\n");
-
-	fptr = fopen("containers.txt", "a");
+	//printf("SIGO VIVO\n");
 
 	if(!already_exist){
-		printf("no existe\n");
+		pthread_mutex_lock( &fileLock1 );
+		//printf("no existe\n");
+
+		fptr = fopen("containers.txt", "a");
 		snprintf(port_str, 10, "%d", args->port);
 
 		strcat(args->name, " ");
@@ -95,15 +103,17 @@ int create_container(void *arg){
 		strcat(args->name, "\n");
 
 		fputs(args->name, fptr);
+
+		fclose(fptr);
+		pthread_mutex_unlock( &fileLock1 );
 	}
 
-	fclose(fptr);
-
-	printf("SIGO MAS VIVO QUE MUERTO\n");
+	//printf("SIGO MAS VIVO QUE MUERTO\n");
 
 	free(args);
 }
 
+//Esta funcion se encarga de enviar al host la peticion de detener o eliminar un contenedor
 int send_petition(void *arg){
 	myarg_t *args = arg;
 	int send_socket, port;
@@ -117,6 +127,7 @@ int send_petition(void *arg){
 	bool delete = false;
 	int del = 0, line = 0;
 
+	pthread_mutex_lock( &fileLock1 );
 	fptr = fopen("containers.txt", "r");
 
     while (getline(&contents, &len, fptr) != -1){
@@ -133,8 +144,8 @@ int send_petition(void *arg){
 	port = atoi(token);
 
 	//printf("puerto: %d para %s\n", port, petition);
-
 	fclose(fptr);
+	pthread_mutex_unlock( &fileLock1 );
 
 	send_socket = socket(AF_INET, SOCK_STREAM, 0);
 	if(send_socket == -1){
@@ -168,7 +179,9 @@ int send_petition(void *arg){
 
 	printf("Respuesta: %s\n", reply);
 
+	
 	if(delete){
+		pthread_mutex_lock( &fileLock1 );
 		fptr = fopen("containers.txt", "r");
 		fptr2 = fopen("temp.txt", "w");
 
@@ -184,6 +197,7 @@ int send_petition(void *arg){
 
 		remove("containers.txt");
 		rename("temp.txt", "containers.txt");
+		pthread_mutex_unlock( &fileLock1 );
 	}
 
 	close(send_socket);
@@ -191,6 +205,7 @@ int send_petition(void *arg){
 	free(args);
 }
 
+//Esta funcion se encarga de enviar al host la peticion de listar los contenedores
 int list_containers(){
 	int list;
 	struct sockaddr_in server;
@@ -227,17 +242,18 @@ int list_containers(){
 	close(list);
 }
 
-
+//Esta funcion se encarga de recibir una peticion enviada por el cliente para posteriormente reenviarla al host seleccionado
 int admin_container(void *arg){
-	myarg_t * args = arg;
+	int ecs_agent = ((myarg_t *)arg)->ecs_agent;
 	char client_message[20], petition[20], name[20];
 	bool received = false;
 	int port, host = 0;
 	char * token;
+	time_t t;
 	puts("Connection accepted");
 
-	//se separa
-	
+	sem_wait(&shmLock);
+	//Se lee la shared memory con la informacion de los hosts activos
 	int fd = shm_open("HOSTS", O_RDONLY, 0666);
 	if(fd < 0){
 		perror("shm_open()");
@@ -247,29 +263,27 @@ int admin_container(void *arg){
 	int *hosts = (int *)mmap(0, 100, PROT_READ, MAP_SHARED, fd, 0);
 	printf("Receiver mapped address: %p\n", hosts);
 
+	/*
 	for(int i = 0; i < hosts[99]; i++){
 		printf("host%d %d\n", i + 1, hosts[i]);
 	}
-
-	/*
-	munmap(hosts, 100);
-
-	close(fd);
-
-	shm_unlink("HOSTS");
 	*/
 
 	received = false;
-
+	//printf("ENTRO: %d\n", ecs_agent);
 	while(!received) {
 		memset( client_message, 0, 20 );
 		//Receive a message from client
-		if (recv(args->ecs_agent, client_message, 20, 0) > 0) {
+		if (recv(ecs_agent, client_message, 20, 0) > 0) {
+			//printf("FUNCIONO: %d\n", ecs_agent);
 			token = strtok(client_message, " ");
 			strcpy(petition, token);
+
+			//Se evalua si es la peticion de listar o no
 			if(strcmp(petition, "list") != 0){
-				
-				printf("OLA SOY CONT: %d\n", hosts[99]);
+				//srand((unsigned) time(&t));
+
+				//Se segmenta el mensaje recibido para poder tener la informacion y se selecciona el host de manera aleatoria
 				token = strtok(NULL, " ");
 				strcpy(name, token);
 				printf("Petition: %s\nName: %s\n", petition, name);
@@ -277,7 +291,7 @@ int admin_container(void *arg){
 				printf("Fue seleccionado el %d\n", host);
 				port = hosts[host];
 				printf("Name: host%d\nPort: %d\n", host + 1, port);
-
+				
 				if(strcmp(petition, "create") == 0){
 					pthread_t create;
 					myarg_t * args_c = malloc(sizeof(*args_c));
@@ -285,7 +299,7 @@ int admin_container(void *arg){
 					strcpy(args_c->name, name);
 					pthread_create( &create, NULL, (void*) create_container, args_c);
 					//pthread_join(create, NULL);
-					//create_container(host_name, port, name);
+
 				} else if(strcmp(petition, "stop") == 0 || strcmp(petition, "delete") == 0){
 					pthread_t send;
 					myarg_t * args_s = malloc(sizeof(*args_s));
@@ -293,24 +307,28 @@ int admin_container(void *arg){
 					strcpy(args_s->name, name);
 					pthread_create( &send, NULL, (void*) send_petition, args_s);
 					//pthread_join(send, NULL);
-					printf("EN PROCESO\n");
-					//send_petition(petition, name);
+					//printf("EN PROCESO\n");
 				} 
 				//Send the message back to client
-				send(args->ecs_agent, client_message, strlen(client_message), 0);
+				send(ecs_agent, client_message, strlen(client_message), 0);
 				received = true;
+				printf("Finalized\n");
 			} else if(strcmp(petition, "list") == 0){
 				pthread_t list;
 				pthread_create( &list, NULL, (void*) list_containers, NULL);
 				//pthread_join(list, NULL);
 				//list_containers();
 				received = true;
-			}
-			
+			}	
 		}
 	}
+	close(fd);
+	sem_post(&shmLock);
+
+	printf("\n");
 }
 
+//Esta funcion se encarga de recibir la conexion de un host recien levantado para agregarlo a la shared memory del ecs
 int subscribe_host(void *arg){
 	myarg_t * args = arg;
 	char host_info[20];
@@ -323,8 +341,10 @@ int subscribe_host(void *arg){
 
 	recv(args->ecs_agent, host_info, 20, 0);
 
+	//Se verifica la informacion del host recibido para posteriormente guardarla en la shared memory
 	printf("Host: %s\n", host_info);
 
+	sem_wait(&shmLock);
 	int fd = shm_open("HOSTS", O_CREAT | O_RDWR, 0666);
 	if (fd < 0){
 		perror("shm_open()");
@@ -348,15 +368,80 @@ int subscribe_host(void *arg){
 
 	printf("shm sender: %d\n", hosts[cont]);
 
+	//La variable global cont ayuda a llevar contabilizada la cantidad de hosts que estan activos
 	cont++;
 	hosts[99] = cont;
 
 	munmap(hosts, 100);
 
 	close(fd);
+	sem_post(&shmLock);
 
 	printf("Finished subscribe host\n");
+}
 
+//Esta funcion se encarga de chequear periodicamente que hosts se encuentran activos
+int monitor(void *arg){
+	int down;
+	bool remove = false;
+
+	//Se comienza abriendo la shared memory en modo de lectura/escrita
+	int fd = shm_open("HOSTS", O_CREAT | O_RDWR, 0666);
+	if (fd < 0){
+		perror("shm_open()");
+		return EXIT_FAILURE;
+	}
+
+	ftruncate(fd, 100);
+
+	int *hosts = (int *)mmap(0, 100, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+
+	//En este ciclo, el cual se realiza cada 10 segundos, se chequea mediante un ping-pong si la conexion hacia los hosts que se encuentran 
+	//en la shared memory funciona, en caso tal de que no se rompe el ciclo y se procede a eliminar dicho host de la shared memory para 
+	//evitar problemas con el resto del elastic container service
+	while(1){
+		remove = false;
+		for(int i = 0; i < hosts[99]; i++){
+			int sock;
+			struct sockaddr_in server;
+			char ping[10] , pong[10];
+			
+			//Create socket
+			sock = socket(AF_INET , SOCK_STREAM, 0);
+			if (sock == -1) {
+				printf("Could not create socket");
+			}
+			puts("Monitoring");
+			printf("Ping a %d\n", hosts[i]);
+			
+			server.sin_addr.s_addr = inet_addr("127.0.0.1");
+			server.sin_family = AF_INET;
+			server.sin_port = htons( hosts[i] );
+
+			//Connect to remote server
+			if (connect(sock, (struct sockaddr *)&server, sizeof(server)) < 0) {
+				perror("Host down");
+				down = i;
+				remove = true;
+				break;
+			}
+			
+			printf("Pong de %d\n\n", hosts[i]);
+			close(sock);
+		}
+		if(remove){
+			sem_wait(&shmLock);
+			for(int j = down; j < hosts[99]; j++){
+				hosts[j] = hosts[j + 1];
+			}
+			cont--;
+			hosts[99] = cont;
+			sem_post(&shmLock);
+		}
+		sleep(10);
+	}
+	close(fd);
+	return 0;
 }
 
 int main(int argc, char *argv[]) {
@@ -367,9 +452,12 @@ int main(int argc, char *argv[]) {
 
 	int readbytes;
 
+	//Fork para crear proceso padre (admin-container) y proceso hijo (subscribe-host)
 	pid_t pid;
-
 	pid = fork();
+
+	//Semaforo para controlar el acceso a la shared memory
+	sem_init(&shmLock, 0, 1);
 
 	if(pid == 0){
 		struct sockaddr_in subs_host_server, ecs_agent_client;
@@ -396,8 +484,15 @@ int main(int argc, char *argv[]) {
 		}
 		
 		puts("Subs host bind done\n");
+
+		//Hilo para monitorear cada 10 segundos que hosts se encuentran activos y cuales no
+		pthread_t monitoring;
+		pthread_create( &monitoring, NULL, (void*)monitor, NULL );
+
 		while(1){
-			listen(subs_socket, 3);
+			//Listen
+			listen(subs_socket, 10);
+
 			puts("Waiting for ecs-agents connections...");
 			c = sizeof(struct sockaddr_in);
 
@@ -407,18 +502,15 @@ int main(int argc, char *argv[]) {
 				return 1;
 			}
 			
+			//Hilo para recibir conexion de un host recien activado
 			pthread_t host_connect;
 			myarg_t arg_h;
 			arg_h.ecs_agent = ecs_agent;
 			pthread_create( &host_connect, NULL, (void*)subscribe_host, &arg_h);
-
 		}
 		
 
 	} else{
-		//close(pipeHost1[1]);
-		//close(pipeHost2[1]);
-
 		struct sockaddr_in server, client;
 
 		//Create socket
@@ -428,9 +520,9 @@ int main(int argc, char *argv[]) {
 		// Protocol value for Internet Protocol(IP), which is 0
 		admin_socket = socket(AF_INET, SOCK_STREAM, 0);
 		if (admin_socket == -1) {
-			printf("Could not create socket");
+			printf("Could not admin container socket");
 		}
-		puts("Socket created");
+		puts("Admin container created");
 		
 		//Prepare the sockaddr_in structure
 		server.sin_family = AF_INET;
@@ -440,17 +532,17 @@ int main(int argc, char *argv[]) {
 		//Bind the socket to the address and port number specified
 		if( bind(admin_socket, (struct sockaddr *)&server, sizeof(server)) < 0) {
 			//print the error message
-			perror("bind failed. Error");
+			perror("Admin container bind failed. Error");
 			return 1;
 		}
-		puts("bind done");
+		puts("Admin container bind done");
 
 		while(1){
 			//Listen
-			listen(admin_socket, 3);
+			listen(admin_socket, 10);
 			
 			//Accept and incoming connection
-			puts("Waiting for incoming connections...");
+			puts("Waiting for incoming petitions...");
 			c = sizeof(struct sockaddr_in);
 			
 			//accept connection from an incoming client
@@ -459,11 +551,14 @@ int main(int argc, char *argv[]) {
 				perror("accept failed");
 				return 1;
 			}
+			//printf("AQUI ES: %d\n", ecs_client);
 
+			//Hilo para la peticion que le llegue al admin container
 			pthread_t agent_connect;
-			myarg_t arg_cl;
-			arg_cl.ecs_agent = ecs_client;
-			pthread_create( &agent_connect, NULL, (void*)admin_container, &arg_cl);
+			myarg_t * arg_cl = malloc(sizeof(myarg_t));
+			arg_cl->ecs_agent = ecs_client;
+			pthread_create( &agent_connect, NULL, (void*)admin_container, arg_cl);
+			//pthread_join( agent_connect, NULL );
 			
 		}
 	}

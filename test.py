@@ -1,5 +1,5 @@
 import ecs
 
-ecs.stop_instance("sowo")
-ecs.stop_instance("wowo")
-ecs.stop_instance("kowo")
+ecs.delete_instance("sowo")
+ecs.delete_instance("wowo")
+ecs.delete_instance("kowo")

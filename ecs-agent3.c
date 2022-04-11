@@ -88,7 +88,7 @@ int main(int argc, char *argv[]) {
 
     memset( info, 0, 20 );
 
-    strcpy(info, "host2 9090");
+    strcpy(info, "host3 5050");
 
     send(agent, info, strlen(info), 0);
 
@@ -98,7 +98,7 @@ int main(int argc, char *argv[]) {
 
 	server.sin_family = AF_INET;
 	server.sin_addr.s_addr = INADDR_ANY;
-	server.sin_port = htons( 9090 );
+	server.sin_port = htons( 5050 );
 
 	if (bind(agent, (struct sockaddr *)&server, sizeof(server)) < 0) {
 		perror("Ecs-agent bind failed. Error");

@@ -1,4 +1,5 @@
 #include<stdio.h>
+#include<stdlib.h>
 #include<string.h>	//strlen
 #include<sys/socket.h>
 #include<arpa/inet.h>	//inet_addr
@@ -12,7 +13,7 @@ typedef struct __myarg_t{
 } myarg_t;
 
 int connection(void* arg){
-	myarg_t *args = (myarg_t *) arg;
+	int admin = ((myarg_t *)arg)->admin;
 	char admin_petition[20], reply[20], petition[20], name[20];
 	char * token;
 	bool received;
@@ -24,7 +25,7 @@ int connection(void* arg){
 	while(!received){
 		memset( admin_petition, 0, 20 );
 		//Receive a message from client
-		if (recv(args->admin, admin_petition, 20, 0) > 0) {
+		if (recv(admin, admin_petition, 20, 0) > 0) {
 			printf("LLego: %s\n", admin_petition);
 			
 			token = strtok(admin_petition, " ");
@@ -59,7 +60,7 @@ int connection(void* arg){
 			strcpy(reply, "Listed");
 		}
 		wait(NULL);
-		send(args->admin, reply, strlen(reply), 0);
+		send(admin, reply, strlen(reply), 0);
 		printf("Se envio la reply\n");
 	}
 }
@@ -107,7 +108,7 @@ int main(int argc, char *argv[]) {
 	puts("Ecs-agent bind done\n");
 	
 	while(1){
-		listen(agent, 3);
+		listen(agent, 10);
 		puts("Waiting for ecs-agents connections...");
 		c = sizeof(struct sockaddr_in);
 
@@ -118,9 +119,9 @@ int main(int argc, char *argv[]) {
 		}
 		
 		pthread_t accepted_connection;
-		myarg_t arg_a;
-		arg_a.admin = admin;
-		pthread_create( &accepted_connection, NULL, (void*) connection, &arg_a);
+		myarg_t * arg_a = malloc(sizeof(myarg_t));
+		arg_a->admin = admin;
+		pthread_create( &accepted_connection, NULL, (void*) connection, arg_a);
 	}
 
 	return 0;
