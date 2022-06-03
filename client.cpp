@@ -53,6 +53,8 @@ int connection( int n ){
 	//keep communicating with server
     strcpy(message, "delete ");
     strcat(message, name);
+    strcat(message, " ");
+    strcat(message, number);
     
     //Send some data
     if( send(sock, message, strlen(message), 0) <= 0) {
@@ -87,7 +89,10 @@ int connection( int n ){
 
 int main(int argc , char *argv[]) {
     vector<thread> petitions;
-    for(int i = 0; i < 10; i++){
+    for(int i = 5; i < 10; i++){
+        petitions.push_back(thread(connection, i));
+    }
+    for(int i = 1; i < 5; i++){
         petitions.push_back(thread(connection, i));
     }
     for_each(petitions.begin(), petitions.end(), mem_fn( &thread::join ));

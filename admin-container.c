@@ -24,6 +24,7 @@ typedef struct __myarg_t{
 	int port;
 	int ecs_agent;
 	char name[20];
+	char priority;
 } myarg_t;
 
 //Esta funcion se encarga de enviar al host la peticion de crear un contenedor
@@ -60,6 +61,10 @@ int create_container(void *arg){
 	strcpy(petition, "create ");
 
 	strcat(petition, args->name);
+
+	strcat(petition, " ");
+	
+	strncat(petition, &args->priority, 1);
 
 	//printf("ENVIO: %s\n", petition);
 
@@ -122,7 +127,7 @@ int send_petition(void *arg){
 	FILE *fptr;
 	FILE *fptr2;
 	char *contents = NULL;
-	char * token;
+	char * token, token2;
     size_t len = 0;
 	bool delete = false;
 	int del = 0, line = 0;
@@ -138,7 +143,6 @@ int send_petition(void *arg){
 			//printf("el token es: %s\n", token);
 			break;
 		}
-		del++;
     }
 	//printf("el tken sale: %s\n", token);
 	port = atoi(token);
@@ -171,6 +175,10 @@ int send_petition(void *arg){
 
 	strcat(args->petition, args->name);
 
+	strcat(args->petition, " ");
+
+	strncat(args->petition, &args->priority, 1);
+
 	send(send_socket, args->petition, strlen(args->petition), 0);
 
 	memset(reply, 0, 50);
@@ -182,6 +190,19 @@ int send_petition(void *arg){
 	
 	if(delete){
 		pthread_mutex_lock( &fileLock1 );
+		contents = NULL;
+		fptr = fopen("containers.txt", "r");
+
+		while (getline(&contents, &len, fptr) != -1){
+			//printf("%s\n", contents);
+			token = strtok(contents, " ");
+			if(strcmp(token, args->name) == 0){
+				break;
+			}
+			del++;
+		}
+		fclose(fptr);
+
 		fptr = fopen("containers.txt", "r");
 		fptr2 = fopen("temp.txt", "w");
 
@@ -245,7 +266,7 @@ int list_containers(){
 //Esta funcion se encarga de recibir una peticion enviada por el cliente para posteriormente reenviarla al host seleccionado
 int admin_container(void *arg){
 	int ecs_agent = ((myarg_t *)arg)->ecs_agent;
-	char client_message[20], petition[20], name[20];
+	char client_message[20], petition[20], name[20], priority;
 	bool received = false;
 	int port, host = 0;
 	char * token;
@@ -286,7 +307,9 @@ int admin_container(void *arg){
 				//Se segmenta el mensaje recibido para poder tener la informacion y se selecciona el host de manera aleatoria
 				token = strtok(NULL, " ");
 				strcpy(name, token);
-				printf("Petition: %s\nName: %s\n", petition, name);
+				token = strtok(NULL, " ");
+				priority = *token;
+				printf("Petition: %s\nName: %s and Priority: %c\n", petition, name, priority);
 				host = rand() % hosts[99];
 				printf("Fue seleccionado el %d\n", host);
 				port = hosts[host];
@@ -297,6 +320,7 @@ int admin_container(void *arg){
 					myarg_t * args_c = malloc(sizeof(*args_c));
 					args_c->port = port;
 					strcpy(args_c->name, name);
+					args_c->priority = priority;
 					pthread_create( &create, NULL, (void*) create_container, args_c);
 					//pthread_join(create, NULL);
 
@@ -305,6 +329,7 @@ int admin_container(void *arg){
 					myarg_t * args_s = malloc(sizeof(*args_s));
 					strcpy(args_s->petition, petition);
 					strcpy(args_s->name, name);
+					args_s->priority = priority;
 					pthread_create( &send, NULL, (void*) send_petition, args_s);
 					//pthread_join(send, NULL);
 					//printf("EN PROCESO\n");
